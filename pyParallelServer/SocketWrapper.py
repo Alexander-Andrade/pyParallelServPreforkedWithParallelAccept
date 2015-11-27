@@ -11,12 +11,13 @@ class SockWrapper:
         self.family = sockArgs.get('family',AF_UNSPEC)
         self.type = sockArgs.get('type',SOCK_STREAM)
         self.proto = sockArgs.get('proto',IPPROTO_TCP)
-
+    '''
     def __del__(self):
-        self.raw_sock.shutdown(SHUT_RDWR)
-        self.raw_sock.close()
-        self.raw_sock = None
-
+        if self.raw_sock is not None:
+            self.raw_sock.shutdown(SHUT_RDWR)
+            self.raw_sock.close()
+            self.raw_sock = None
+    '''
     def attachServToAddr(self,addrInfo):
         af_family,socktype,sock,canonname,sockaddr = addrInfo
         try:
@@ -44,8 +45,8 @@ class SockWrapper:
             if self.attachServToAddr(self.addr_info):
                 break
         if self.raw_sock is None:
-            print("can't create server")
-            sys.exit(1)
+            raise OSError("can't create server")
+         
 
     def attachClientToAddr(self,addrInfo):
         af_family,socktype,proto,canonname,sockaddr = addrInfo
@@ -68,8 +69,8 @@ class SockWrapper:
             if self.attachClientToAddr(self.addr_info):
                 break
         if self.raw_sock is None:
-            print("fail to onnect to the socket")
-            sys.exit(1)  
+            raise OSError("fail to connect to the socket")
+          
     
     def reattachClientSock(self):
         if self.raw_sock is not None:

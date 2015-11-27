@@ -18,12 +18,8 @@ class FileWorker:
         self.file = None
         self.filePos = 0
         self.loadingPercent = 0
-        #UDP packet controll
-        self.datagramsId = []
-        #number of udp datagrams answer send afrer
-        self.nUdpPacksCtrl = 1
         self.recoveryFunc = recoveryFunc
-
+    
 
     def outFileInfo(self):
         #print file name
@@ -65,7 +61,6 @@ class FileWorker:
             self.sock.sendRefuse()
             raise FileWorkerError("can't open the file")
         self.sock.sendConfirm()
-
         self.sock.setSendBufferSize(self.bufferSize)
         #real system buffer size can differ
         self.bufferSize = self.sock.getSendBufferSize()
@@ -84,9 +79,7 @@ class FileWorker:
         try:
             while True:
                 try:
-                    #one byte for the OOB data
-                    data = self.file.read(self.bufferSize - 1)
-
+                    data = self.file.read(self.bufferSize)
                     #if eof
                     if not data:
                         self.sock.setReceiveTimeout(self.timeOut)
@@ -98,14 +91,12 @@ class FileWorker:
                             break
                         else:
                             raise OSError("fail to transfer file")
-
                     #send data portion
                     #error will rase OSError 
                     self.filePos += len(data)
                     self.actualizeAndshowPercents(self.percentsOfLoading(self.filePos),20,'.') 
           
-                    #self.sock.send(data)
-                    self.sock.send(data + self.loadingPercent.to_bytes(1,byteorder='big') ,MSG_OOB)
+                    self.sock.send(data)
                 except OSError as e:
                     #file transfer reconnection
                     self.senderRecovers()
@@ -153,16 +144,11 @@ class FileWorker:
         try:
             while True:
                 try:
-                    #OOB data (urgent)
-                    self.loadingPercent = int.from_bytes(self.sock.recv(1,MSG_OOB),byteorder='big')
-                    
-                    #show OOB byte
-                    self.actualizeAndshowPercents(self.loadingPercent,20,'.')
                     #usual data
-                    data = self.sock.recv(self.bufferSize - 1)
+                    data = self.sock.recv(self.bufferSize)
                     self.file.write(data)
                     self.filePos += len(data)
-
+                    self.actualizeAndshowPercents(self.loadingPercent,20,'.')
                     if self.filePos == self.fileLen:
                         #send ack to end the file transmittion
                         self.sock.sendInt(self.filePos)
