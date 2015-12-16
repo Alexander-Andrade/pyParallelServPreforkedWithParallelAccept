@@ -6,19 +6,68 @@ from FileWorker import*
 from SocketWrapper import*
 import time
 import multiprocessing as mp
+#from multiprocessing.reduction import re
 
-#def servWork(serv):
-#    serv.
+# make sockets pickable/inheritable
+if sys.platform == 'win32':
+    import multiprocessing.reduction
 
-class TCPServer(Connection):
+class ParentServer:
 
-    def __init__(self, IP,port,nConnections = 1,sendBuflen = 2048,timeOut = 15):
-        super().__init__(sendBuflen,timeOut)
+    def __init__(self, IP,port,nConnections = 1):
         self.servSock = TCP_ServSockWrapper(IP,port,nConnections) 
-        self.talksock = None ##
+        #clients number
+        self.nClients = 0
+         #our process pool
+        self.procPool = mp.Pool(processes=3)
+        #self.childProcesses = []
+
+    def onClientGone(self,res):
+        #callback func, is called, when
+        #one client stop working with server 
+        self.nClients -= 1;
+
+         
+    def registerNewClient(self):
+        sock, addr = self.servSock.raw_sock.accept()
+        talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
+        return talksock
+
+    def workWithClients(self):
+        while True:
+            sock = self.registerNewClient()
+            #self.updateChildProcesses()
+            self.updateProcessPool(sock)
+    
+    def updateChildProcesses(self):
+        childProc = mp.Process(target=self.clientCommandsHandling,args=())
+        childProc.start()
+        self.childProcesses = [proc for proc in self.childProcesses if proc.is_alive() == True]
+        self.childProcesses.append(childProc)
+    
+    
+
+    def updateProcessPool(self,sock):
+        self.nClients += 1;
+        fd = sock
+        res = self.procPool.apply_async(runChildProcess,args=(sock,),callback=self.onClientGone)
+       
+    
+
+def runChildProcess(talksock):
+    print('started')
+    print(talksock)
+    childServ = ChildServer(talksock)
+    childServ.clientCommandsHandling()
+
+class ChildServer(Connection):
+
+    def __init__(self,sock,sendBufLen=2048, timeOut=30):
+        super().__init__(sendBufLen, timeOut)
+        self.talksock = sock
+        #get id from client
         self.fillCommandDict()
-        self.clientsId = [] ##
-        self.childProcesses = []
+       
 
 
     def fillCommandDict(self):
@@ -27,9 +76,7 @@ class TCPServer(Connection):
                               'quit':self.quit,
                               'download':self.sendFileTCP,
                               'upload':self.recvFileTCP})
-    
 
- 
     def echo(self,commandArgs):
         self.talksock.sendMsg(commandArgs)
 
@@ -66,9 +113,18 @@ class TCPServer(Connection):
         return self.talksock
 
 
+    def writeClientId(self,id):
+        if len(self.clientsId) == 2:
+            #pop old id
+            self.clientsId.pop(0)
+        #write new id
+        self.clientsId.append(id)
+
+
     def clientCommandsHandling(self):
         while True:
             try:
+                print('inside')
                 message = self.talksock.recvMsg()
                 
                 if len(message) == 0:
@@ -95,38 +151,10 @@ class TCPServer(Connection):
                 break
 
 
-    def writeClientId(self,id):
-        if len(self.clientsId) == 2:
-            #pop old id
-            self.clientsId.pop(0)
-        #write new id
-        self.clientsId.append(id)
-            
-                    
-    def registerNewClient(self):
-        sock, addr = self.servSock.raw_sock.accept()
-        self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
-        #get id from client
-        id = self.talksock.recvInt()
-        self.writeClientId(id)
-        return self.talksock
-
-    def workWithClients(self):
-        while True:
-            self.registerNewClient()
-            #self.clientCommandsHandling()
-            self.updateChildProcesses()
-    
-    def updateChildProcesses(self):
-        childProc = mp.Process(target=self.clientCommandsHandling,args=())
-        childProc.start()
-        self.childProcesses = [proc for proc in self.childProcesses if proc.is_alive() == True]
-        self.childProcesses.append(childProc)
-
 
 if __name__ == "__main__":
     
-    server = TCPServer("192.168.1.2","6000")
+    server = ParentServer("192.168.1.2","6000")
     server.workWithClients()
    
     
