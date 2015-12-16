@@ -15,59 +15,49 @@ if sys.platform == 'win32':
 class ParentServer:
 
     def __init__(self, IP,port,nConnections = 3,nProcesses = 3):
-        self.servSock = TCP_ServSockWrapper(IP,port,nConnections) 
-        #clients number
-        self.nClients = 0
+        self.servsock = TCP_ServSockWrapper(IP,port,nConnections) 
         #our process pool
         self.nProcesses = nProcesses
         self.procPool = mp.Pool(processes=self.nProcesses)
-  
-
-    def onClientGone(self,res):
-        #callback func, is called, when
-        #one client stop working with server 
-        self.nClients -= 1;
-
-         
-    def registerNewClient(self):
-        sock, addr = self.servSock.raw_sock.accept()
-        talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
-        return talksock
-
-    def workWithClients(self):
-        while True:
-            sock = self.registerNewClient()
-            self.updateProcessPool(sock)
-    
-    def updateProcessPool(self,sock):
-        if self.nClients < self.nProcesses:
-            self.nClients += 1;
-            res = self.procPool.apply_async(runChildProcess,args=(sock,),callback=self.onClientGone)
+        self.runProcessPool()
+        self.procPool.close()
+        self.procPool.join()
+     
+    def runProcessPool(self):
+        res = self.procPool.map_async(runChildProcess,[self.servsock for proc in range(self.nProcesses)])
        
     
-
-def runChildProcess(talksock):
+def runChildProcess(servsock):
     print('started')
-    print(talksock)
-    childServ = ChildServer(talksock)
-    childServ.clientCommandsHandling()
+    print(servsock)
+    childServ = ChildServer(servsock)
+    childServ.workWithClients()
 
 class ChildServer(Connection):
 
-    def __init__(self,sock,sendBufLen=2048, timeOut=30):
+    def __init__(self,servsock,sendBufLen=2048, timeOut=30):
         super().__init__(sendBufLen, timeOut)
-        self.talksock = sock
+        self.talksock = None
+        self.servsock = servsock
         #get id from client
         self.fillCommandDict()
        
-
-
     def fillCommandDict(self):
         self.commands.update({'echo':self.echo,
                               'time':self.time,
                               'quit':self.quit,
                               'download':self.sendFileTCP,
                               'upload':self.recvFileTCP})
+
+    def registerNewClient(self):
+       sock, addr = self.servsock.raw_sock.accept()
+       self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
+       
+
+    def workWithClients(self):
+        while True:
+            self.registerNewClient()
+            self.clientCommandsHandling()
 
     def echo(self,commandArgs):
         self.talksock.sendMsg(commandArgs)
@@ -92,12 +82,12 @@ class ChildServer(Connection):
 
 
     def recoverTCP(self,timeOut):
-        self.servSock.raw_sock.settimeout(timeOut)
+        self.servsock.raw_sock.settimeout(timeOut)
         try:
             self.talksock = self.registerNewClient()
         except OSError as e:
             #disable timeout
-            self.servSock.raw_sock.settimeout(None)
+            self.servsock.raw_sock.settimeout(None)
             raise 
         #compare prev and cur clients id's, may be the same client
         if self.clientsId[0] != self.clientsId[1]:
@@ -146,7 +136,7 @@ class ChildServer(Connection):
 
 if __name__ == "__main__":
     
+  
     server = ParentServer("192.168.1.2","6000")
-    server.workWithClients()
    
     
