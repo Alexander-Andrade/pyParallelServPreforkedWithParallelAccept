@@ -14,13 +14,14 @@ if sys.platform == 'win32':
 
 class ParentServer:
 
-    def __init__(self, IP,port,nConnections = 1):
+    def __init__(self, IP,port,nConnections = 3,nProcesses = 3):
         self.servSock = TCP_ServSockWrapper(IP,port,nConnections) 
         #clients number
         self.nClients = 0
-         #our process pool
-        self.procPool = mp.Pool(processes=3)
-        #self.childProcesses = []
+        #our process pool
+        self.nProcesses = nProcesses
+        self.procPool = mp.Pool(processes=self.nProcesses)
+  
 
     def onClientGone(self,res):
         #callback func, is called, when
@@ -36,21 +37,12 @@ class ParentServer:
     def workWithClients(self):
         while True:
             sock = self.registerNewClient()
-            #self.updateChildProcesses()
             self.updateProcessPool(sock)
     
-    def updateChildProcesses(self):
-        childProc = mp.Process(target=self.clientCommandsHandling,args=())
-        childProc.start()
-        self.childProcesses = [proc for proc in self.childProcesses if proc.is_alive() == True]
-        self.childProcesses.append(childProc)
-    
-    
-
     def updateProcessPool(self,sock):
-        self.nClients += 1;
-        fd = sock
-        res = self.procPool.apply_async(runChildProcess,args=(sock,),callback=self.onClientGone)
+        if self.nClients < self.nProcesses:
+            self.nClients += 1;
+            res = self.procPool.apply_async(runChildProcess,args=(sock,),callback=self.onClientGone)
        
     
 
