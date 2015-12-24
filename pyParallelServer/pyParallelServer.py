@@ -6,42 +6,76 @@ from FileWorker import*
 from SocketWrapper import*
 import time
 import multiprocessing as mp
+from ctypes import Structure,c_int
 #from multiprocessing.reduction import re
 
 # make sockets pickable/inheritable
 if sys.platform == 'win32':
     import multiprocessing.reduction
 
+class ProcStatistics(Structure):
+    _fields_ = [('nproc',c_int),('nclients',c_int)]
+
+
 class ParentServer:
 
-    def __init__(self, IP,port,nConnections = 3,nProcesses = 3):
+    def __init__(self, IP,port,nConnections = 5,nmin=3,nmax=5,timeout = 30):
         self.servsock = TCP_ServSockWrapper(IP,port,nConnections) 
-        #our process pool
-        self.nProcesses = nProcesses
-        self.procPool = mp.Pool(processes=self.nProcesses)
+        #min and max number of processes in the pool
+        self.nmin = nmin
+        self.nmax = nmax
+        #tools for process sync
+        self.procManager = mp.Manager()
+        #event
+        self.onClientComeEvent = self.procManager.Event()
+        #shared memmory for counting busy processess
+        self.lock = mp.Lock()
+        self.procStat = mp.Value(ProcStatistics,0,lock=self.lock) 
+        #timeout for accept
+        self.timeout = timeout
         self.runProcessPool()
-        self.procPool.close()
-        self.procPool.join()
-     
+        self.monitorProcessPool()
+
+        
     def runProcessPool(self):
-        res = self.procPool.map_async(runChildProcess,[self.servsock for proc in range(self.nProcesses)])
-       
+        #base processess
+        isBaseProcess = True
+        for i in range(self.nmin):
+            mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
     
-def runChildProcess(servsock):
-    print('started')
-    print(servsock)
-    childServ = ChildServer(servsock)
+    def monitorProcessPool(self):
+        isBaseProcess = False
+        while True:
+            #waiting event of new client come
+            self.onClientComeEvent.wait()
+            self.onClientComeEvent.clear()
+            #number of processes equ number of clients(no available processess)
+            if self.procStat.nproc == self.procStat.nclients and self.procStat.nproc < self.nmax:
+                #add a new process if not enough
+                mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
+    
+def runChildProcess(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout):
+    #servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout = args
+    #register new process
+    procStat.nproc += 1
+    print('shared memory-> proc number:' + str(procStat.nproc))
+    childServ = ChildServer(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout)
     childServ.workWithClients()
 
 class ChildServer(Connection):
 
-    def __init__(self,servsock,sendBufLen=2048, timeOut=30):
+    def __init__(self,servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout,sendBufLen=2048, timeOut=30):
         super().__init__(sendBufLen, timeOut)
         self.talksock = None
         self.servsock = servsock
+        self.procStat = procStat
+        self.onClientComeEvent = clientComeEvent
+        self.isBaseProcess = isBaseProcess
+        self.acceptTimeout = acceptTimeout 
         #get id from client
         self.fillCommandDict()
-       
+        self.unblockNonBaseSockets()
+
     def fillCommandDict(self):
         self.commands.update({'echo':self.echo,
                               'time':self.time,
@@ -49,15 +83,39 @@ class ChildServer(Connection):
                               'download':self.sendFileTCP,
                               'upload':self.recvFileTCP})
 
+   
+    def unblockNonBaseSockets(self):
+        #make socket unblocked
+        timeout = self.acceptTimeout if not self.isBaseProcess else None 
+        self.servsock.raw_sock.settimeout(timeout)
+   
+         
     def registerNewClient(self):
-       sock, addr = self.servsock.raw_sock.accept()
-       self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
+        try:
+            sock, addr = self.servsock.raw_sock.accept()
+            self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
+            #show client addr
+            print(self.talksock.inetAddr)
+            #register in shared memory, rase onClientCome event
+            self.procStat.nclients += 1
+            self.onClientComeEvent.set()
+        except OSError as msg:
+            #abort process if accept timeout
+            #decrease process counter
+            self.procStat.nproc -= 1
+            #jmp to abort the process
+            raise
+
        
 
     def workWithClients(self):
-        while True:
-            self.registerNewClient()
-            self.clientCommandsHandling()
+        try:
+            while True:
+                self.registerNewClient()
+                self.clientCommandsHandling()
+        except OSError:
+            #abort this process
+            pass
 
     def echo(self,commandArgs):
         self.talksock.sendMsg(commandArgs)
@@ -106,7 +164,7 @@ class ChildServer(Connection):
     def clientCommandsHandling(self):
         while True:
             try:
-                print('inside')
+               
                 message = self.talksock.recvMsg()
                 
                 if len(message) == 0:
@@ -130,13 +188,16 @@ class ChildServer(Connection):
                 print(e)
                 
             except (OSError,FileWorkerCritError):
+                #decrease clients counter
+                self.procStat.nclients -= 1
+                #print that the client gone
+                print(self.talksock.inetAddr)
                 break
 
 
 
 if __name__ == "__main__":
-    
-  
+
     server = ParentServer("192.168.1.2","6000")
    
     
