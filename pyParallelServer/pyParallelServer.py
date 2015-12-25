@@ -17,6 +17,10 @@ class ProcStatistics(Structure):
     _fields_ = [('nproc',c_int),('nclients',c_int)]
 
 
+def showSharedStatusInfo(procStat):
+    print('processes : ' + str(procStat.nproc),end='  ')
+    print('cients : ' + str(procStat.nclients),end='  ',flush=True)
+
 class ParentServer:
 
     def __init__(self, IP,port,nConnections = 5,nmin=3,nmax=5,timeout = 30):
@@ -29,8 +33,7 @@ class ParentServer:
         #event
         self.onClientComeEvent = self.procManager.Event()
         #shared memmory for counting busy processess
-        self.lock = mp.Lock()
-        self.procStat = mp.Value(ProcStatistics,0,lock=self.lock) 
+        self.procStat = mp.Value(ProcStatistics,0,lock=True) 
         #timeout for accept
         self.timeout = timeout
         self.runProcessPool()
@@ -49,15 +52,10 @@ class ParentServer:
             #waiting event of new client come
             self.onClientComeEvent.wait()
             self.onClientComeEvent.clear()
-            self.showSharedStatusInfo()
             #number of processes equ number of clients(no available processess)
             if self.procStat.nproc == self.procStat.nclients and self.procStat.nproc < self.nmax:
                 #add a new process if not enough
                 mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
-
-    def showSharedStatusInfo(self):
-        print('processes number: ' + str(self.procStat.nproc),end='  ')
-        print('cients number: ' + str(self.procStat.nclients),end='  ',flush=True)
 
 
 def runChildProcess(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout):
@@ -66,6 +64,8 @@ def runChildProcess(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeou
     procStat.nproc += 1
     childServ = ChildServer(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout)
     childServ.workWithClients()
+
+
 
 class ChildServer(Connection):
 
@@ -89,17 +89,24 @@ class ChildServer(Connection):
                               'upload':self.recvFileTCP})
 
    
+   
     def unblockNonBaseSockets(self):
         #make socket unblocked
-        timeout = self.acceptTimeout if self.isBaseProcess != 0 else None             
+        timeout = self.acceptTimeout if not self.isBaseProcess else None             
         self.servsock.raw_sock.settimeout(timeout)
     
-    def showProcStatusInfo(self):
+    def showProcStatus(self):
         print('proc status: ' + ('base' if self.isBaseProcess else 'temporary'),end='  ')
+
+    def showStatusInfo(self):
+        showSharedStatusInfo(self.procStat)
+        self.showProcStatus()
         print(self.talksock.inetAddr,end=' ')
         print('is connected') 
 
     def showGoneClient(self):
+        showSharedStatusInfo(self.procStat)
+        self.showProcStatus()
         print(self.talksock.inetAddr,end=' ')
         print('gone')    
 
@@ -110,7 +117,7 @@ class ChildServer(Connection):
             #register in shared memory, rase onClientCome event
             self.procStat.nclients += 1
             #show client addr
-            self.showProcStatusInfo()
+            self.showStatusInfo()
             self.onClientComeEvent.set()
         except OSError as msg:
             #abort process if accept timeout
@@ -129,6 +136,7 @@ class ChildServer(Connection):
                 self.clientCommandsHandling()
         except OSError:
             #abort this process (timeout exit only)
+            print('broken')
             pass
 
     def echo(self,commandArgs):
@@ -139,8 +147,8 @@ class ChildServer(Connection):
         self.talksock.sendMsg(time.asctime())
 
     def quit(self,commandArgs):
-        self.talksock.shutdown(socket.SHUT_RDWR)
-        self.talksock.close()
+        self.talksock.raw_sock.shutdown(socket.SHUT_RDWR)
+        self.talksock.raw_sock.close()
 
 
     def sendFileTCP(self,commandArgs):
@@ -201,7 +209,8 @@ class ChildServer(Connection):
                 #can work with the same client
                 print(e)
                 
-            except (OSError,FileWorkerCritError):
+            except (OSError,FileWorkerCritError) as e:
+                print(e)
                 #decrease clients counter
                 self.procStat.nclients -= 1
                 #print that the client gone
