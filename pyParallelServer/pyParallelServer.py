@@ -36,6 +36,7 @@ class ParentServer:
         self.procStat = mp.Value(ProcStatistics,0,lock=True) 
         #timeout for accept
         self.timeout = timeout
+        self.acceptLock = mp.Lock()
         self.runProcessPool()
         self.monitorProcessPool()
 
@@ -44,7 +45,7 @@ class ParentServer:
         #base processess
         isBaseProcess = True
         for i in range(self.nmin):
-            mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
+            mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,self.acceptLock,isBaseProcess,self.timeout)).start()
     
     def monitorProcessPool(self):
         isBaseProcess = False
@@ -55,26 +56,27 @@ class ParentServer:
             #number of processes equ number of clients(no available processess)
             if self.procStat.nproc == self.procStat.nclients and self.procStat.nproc < self.nmax:
                 #add a new process if not enough
-                mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
+                mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,self.acceptLock,isBaseProcess,self.timeout)).start()
 
 
-def runChildProcess(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout):
+def runChildProcess(servsock,procStat,clientComeEvent,acceptLock,isBaseProcess,acceptTimeout):
     #servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout = args
     #register new process
     procStat.nproc += 1
-    childServ = ChildServer(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout)
+    childServ = ChildServer(servsock,procStat,clientComeEvent,acceptLock,isBaseProcess,acceptTimeout)
     childServ.workWithClients()
 
 
 
 class ChildServer(Connection):
 
-    def __init__(self,servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout,sendBufLen=2048, timeOut=30):
+    def __init__(self,servsock,procStat,clientComeEvent,acceptLock,isBaseProcess,acceptTimeout,sendBufLen=2048, timeOut=30):
         super().__init__(sendBufLen, timeOut)
         self.talksock = None
         self.servsock = servsock
         self.procStat = procStat
         self.onClientComeEvent = clientComeEvent
+        self.acceptLock = acceptLock
         self.isBaseProcess = isBaseProcess
         self.acceptTimeout = acceptTimeout 
         #get id from client
@@ -112,7 +114,10 @@ class ChildServer(Connection):
 
     def registerNewClient(self):
         try:
+            #defender accept by lock from multiple access
+            #self.acceptLock.acquire()
             sock, addr = self.servsock.raw_sock.accept()
+            #self.acceptLock.release()
             self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
             #register in shared memory, rase onClientCome event
             self.procStat.nclients += 1
@@ -147,7 +152,7 @@ class ChildServer(Connection):
         self.talksock.sendMsg(time.asctime())
 
     def quit(self,commandArgs):
-        self.talksock.raw_sock.shutdown(socket.SHUT_RDWR)
+        self.talksock.raw_sock.shutdown(SHUT_RDWR)
         self.talksock.raw_sock.close()
 
 
@@ -211,11 +216,11 @@ class ChildServer(Connection):
                 
             except (OSError,FileWorkerCritError) as e:
                 print(e)
-                #decrease clients counter
-                self.procStat.nclients -= 1
-                #print that the client gone
-                self.showGoneClient()
                 break
+        #decrease clients counter
+        self.procStat.nclients -= 1
+        #print that the client gone
+        self.showGoneClient()
 
 
 
