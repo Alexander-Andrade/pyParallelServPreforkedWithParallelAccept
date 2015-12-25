@@ -50,9 +50,11 @@ class FileWorker:
 
 
     def send(self,fileName):
+        print('send inside')
         self.fileName = fileName
         if not os.path.exists(fileName):
-            raise FileWorkerError("file does not exist") 
+            self.sock.sendRefuse() 
+            raise FileWorkerError("file does not exist")
         try:
             #binary mode
             self.file = open(fileName,'rb')
