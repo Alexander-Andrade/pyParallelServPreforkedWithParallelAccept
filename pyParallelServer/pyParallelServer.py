@@ -49,16 +49,21 @@ class ParentServer:
             #waiting event of new client come
             self.onClientComeEvent.wait()
             self.onClientComeEvent.clear()
+            self.showSharedStatusInfo()
             #number of processes equ number of clients(no available processess)
             if self.procStat.nproc == self.procStat.nclients and self.procStat.nproc < self.nmax:
                 #add a new process if not enough
                 mp.Process(target=runChildProcess,args=(self.servsock,self.procStat,self.onClientComeEvent,isBaseProcess,self.timeout)).start()
-    
+
+    def showSharedStatusInfo(self):
+        print('processes number: ' + str(self.procStat.nproc),end='  ')
+        print('cients number: ' + str(self.procStat.nclients),end='  ',flush=True)
+
+
 def runChildProcess(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout):
     #servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout = args
     #register new process
     procStat.nproc += 1
-    print('shared memory-> proc number:' + str(procStat.nproc))
     childServ = ChildServer(servsock,procStat,clientComeEvent,isBaseProcess,acceptTimeout)
     childServ.workWithClients()
 
@@ -86,23 +91,32 @@ class ChildServer(Connection):
    
     def unblockNonBaseSockets(self):
         #make socket unblocked
-        timeout = self.acceptTimeout if not self.isBaseProcess else None 
+        timeout = self.acceptTimeout if self.isBaseProcess != 0 else None             
         self.servsock.raw_sock.settimeout(timeout)
-   
-         
+    
+    def showProcStatusInfo(self):
+        print('proc status: ' + ('base' if self.isBaseProcess else 'temporary'),end='  ')
+        print(self.talksock.inetAddr,end=' ')
+        print('is connected') 
+
+    def showGoneClient(self):
+        print(self.talksock.inetAddr,end=' ')
+        print('gone')    
+
     def registerNewClient(self):
         try:
             sock, addr = self.servsock.raw_sock.accept()
             self.talksock = SockWrapper(raw_sock=sock,inetAddr=addr)
-            #show client addr
-            print(self.talksock.inetAddr)
             #register in shared memory, rase onClientCome event
             self.procStat.nclients += 1
+            #show client addr
+            self.showProcStatusInfo()
             self.onClientComeEvent.set()
         except OSError as msg:
             #abort process if accept timeout
             #decrease process counter
             self.procStat.nproc -= 1
+            print('timeout...',end='')
             #jmp to abort the process
             raise
 
@@ -114,7 +128,7 @@ class ChildServer(Connection):
                 self.registerNewClient()
                 self.clientCommandsHandling()
         except OSError:
-            #abort this process
+            #abort this process (timeout exit only)
             pass
 
     def echo(self,commandArgs):
@@ -191,7 +205,7 @@ class ChildServer(Connection):
                 #decrease clients counter
                 self.procStat.nclients -= 1
                 #print that the client gone
-                print(self.talksock.inetAddr)
+                self.showGoneClient()
                 break
 
 
@@ -199,5 +213,3 @@ class ChildServer(Connection):
 if __name__ == "__main__":
 
     server = ParentServer("192.168.1.2","6000")
-   
-    
