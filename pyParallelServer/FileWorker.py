@@ -50,7 +50,6 @@ class FileWorker:
 
 
     def send(self,fileName):
-        print('send inside')
         self.fileName = fileName
         if not os.path.exists(fileName):
             self.sock.sendRefuse() 
